@@ -4,10 +4,18 @@ const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const Razorpay = require('razorpay');
 const config = require('./config');
 
 // Initialize Express App
 const app = express();
+
+// Initialize Razorpay Client
+const razorpay = new Razorpay({
+  key_id: config.RAZORPAY_KEY_ID,
+  key_secret: config.RAZORPAY_KEY_SECRET
+});
 
 // Enable CORS for all requests (public client and agent)
 app.use(cors());
@@ -43,7 +51,6 @@ const upload = multer({
 });
 
 // In-Memory Job Queue Store
-// job structure: { id, filename, originalName, pages, copies, status, error, createdAt }
 const jobs = new Map();
 
 // Helper to delete physical PDF file
@@ -58,7 +65,6 @@ const deleteFile = (filename) => {
 };
 
 // Periodic Job & File Cleanup (runs every 10 minutes)
-// Deletes any jobs and their associated files that are older than 30 minutes
 setInterval(() => {
   const now = Date.now();
   const expirationTime = 30 * 60 * 1000; // 30 minutes
@@ -82,54 +88,110 @@ const authorizeAgent = (req, res, next) => {
 };
 
 // ==========================================
-// CLIENT PUBLIC ENDPOINTS
+// CLIENT PUBLIC & PAYMENT ENDPOINTS
 // ==========================================
 
 /**
- * @api {post} /api/print Submit Print Job
- * @apiDescription Frontend uploads PDF and select print options.
+ * @api {post} /api/payment/create-order Create Razorpay Order
+ * @apiDescription Frontend calls this to get a Razorpay Order ID and price total.
  */
-app.post('/api/print', upload.single('pdf'), (req, res) => {
+app.post('/api/payment/create-order', async (req, res) => {
+  try {
+    const { pagesCount, copies, colorMode } = req.body;
+    const parsedPages = parseInt(pagesCount, 10);
+    const parsedCopies = parseInt(copies, 10);
+
+    if (isNaN(parsedPages) || parsedPages < 1 || isNaN(parsedCopies) || parsedCopies < 1) {
+      return res.status(400).json({ success: false, error: 'Invalid pages or copies count' });
+    }
+
+    const ratePerPage = colorMode === 'color' ? config.PRICE_COLOR : config.PRICE_BW;
+    const totalPages = parsedPages * parsedCopies;
+    const amountInRupees = totalPages * ratePerPage;
+    const amountInPaise = amountInRupees * 100; // Razorpay expects amount in paise
+
+    const options = {
+      amount: amountInPaise,
+      currency: 'INR',
+      receipt: `rcpt_${Date.now()}_${Math.floor(Math.random() * 1000)}`
+    };
+
+    const order = await razorpay.orders.create(options);
+
+    console.log(`Razorpay Order Created: ${order.id} (Amount: ₹${amountInRupees}, Rate: ₹${ratePerPage}/pg)`);
+
+    res.json({
+      success: true,
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      keyId: config.RAZORPAY_KEY_ID,
+      amountInRupees: amountInRupees,
+      ratePerPage: ratePerPage
+    });
+  } catch (err) {
+    console.error('Error creating Razorpay order:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * @api {post} /api/payment/verify-and-print Verify Payment Signature & Submit Job
+ * @apiDescription Verifies Razorpay HMAC SHA256 signature and queues the print job.
+ */
+app.post('/api/payment/verify-and-print', upload.single('pdf'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, error: 'No PDF file uploaded' });
     }
 
-    const { pages, copies } = req.body;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, pages, copies, colorMode } = req.body;
 
-    if (!pages) {
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       deleteFile(req.file.filename);
-      return res.status(400).json({ success: false, error: 'Pages parameter is required' });
+      return res.status(400).json({ success: false, error: 'Payment verification details missing' });
     }
 
-    const parsedCopies = parseInt(copies, 10);
-    if (isNaN(parsedCopies) || parsedCopies < 1) {
+    // Verify HMAC-SHA256 Signature
+    const body = razorpay_order_id + '|' + razorpay_payment_id;
+    const expectedSignature = crypto
+      .createHmac('sha256', config.RAZORPAY_KEY_SECRET)
+      .update(body.toString())
+      .digest('hex');
+
+    if (expectedSignature !== razorpay_signature) {
+      console.error(`Invalid Razorpay signature! Order: ${razorpay_order_id}`);
       deleteFile(req.file.filename);
-      return res.status(400).json({ success: false, error: 'Copies must be a positive integer' });
+      return res.status(400).json({ success: false, error: 'Invalid payment signature' });
     }
 
+    console.log(`Payment Verified Successfully! Payment ID: ${razorpay_payment_id}`);
+
+    const parsedCopies = parseInt(copies, 10) || 1;
     const jobId = uuidv4();
     const newJob = {
       id: jobId,
       filename: req.file.filename,
       originalName: req.file.originalname,
-      pages: pages.trim(), // e.g. "all", "1-3", "1,3,5"
+      pages: (pages || 'all').trim(),
       copies: parsedCopies,
+      colorMode: colorMode === 'color' ? 'color' : 'bw',
+      paymentId: razorpay_payment_id,
       status: 'pending',
       error: null,
       createdAt: Date.now()
     };
 
     jobs.set(jobId, newJob);
-    console.log(`New job added: ${jobId} (Pages: ${newJob.pages}, Copies: ${newJob.copies})`);
+    console.log(`Job Queued: ${jobId} (Pages: ${newJob.pages}, Copies: ${newJob.copies}, Mode: ${newJob.colorMode})`);
 
     res.status(201).json({
       success: true,
       jobId: jobId,
-      message: 'Print job queued successfully.'
+      message: 'Payment verified & print job queued successfully.'
     });
   } catch (err) {
-    console.error('Error submitting print job:', err);
+    console.error('Error verifying payment:', err);
     if (req.file) {
       deleteFile(req.file.filename);
     }
@@ -162,7 +224,6 @@ app.get('/api/print/status/:id', (req, res) => {
  * @apiDescription Agent checks for any pending print jobs. Returns the oldest pending job.
  */
 app.get('/api/agent/jobs', authorizeAgent, (req, res) => {
-  // Find oldest pending job
   let oldestPendingJob = null;
   for (const job of jobs.values()) {
     if (job.status === 'pending') {
@@ -176,7 +237,6 @@ app.get('/api/agent/jobs', authorizeAgent, (req, res) => {
     return res.json({ success: true, job: null });
   }
 
-  // Set status to processing so it's not picked up by parallel polls
   oldestPendingJob.status = 'processing';
   
   res.json({
@@ -185,6 +245,7 @@ app.get('/api/agent/jobs', authorizeAgent, (req, res) => {
       id: oldestPendingJob.id,
       pages: oldestPendingJob.pages,
       copies: oldestPendingJob.copies,
+      colorMode: oldestPendingJob.colorMode || 'bw',
       originalName: oldestPendingJob.originalName
     }
   });
@@ -192,7 +253,6 @@ app.get('/api/agent/jobs', authorizeAgent, (req, res) => {
 
 /**
  * @api {get} /api/agent/jobs/:id/download Download Job PDF
- * @apiDescription Agent downloads the print job PDF file.
  */
 app.get('/api/agent/jobs/:id/download', authorizeAgent, (req, res) => {
   const job = jobs.get(req.params.id);
@@ -210,8 +270,6 @@ app.get('/api/agent/jobs/:id/download', authorizeAgent, (req, res) => {
 
 /**
  * @api {post} /api/agent/jobs/:id/complete Report Print Success
- * @apiDescription Agent reports that the job was printed successfully.
- * The backend marks it complete and immediately deletes the physical file.
  */
 app.post('/api/agent/jobs/:id/complete', authorizeAgent, (req, res) => {
   const job = jobs.get(req.params.id);
@@ -223,17 +281,15 @@ app.post('/api/agent/jobs/:id/complete', authorizeAgent, (req, res) => {
   deleteFile(job.filename);
   console.log(`Job ${job.id} marked COMPLETED by agent`);
 
-  // We can keep the job in status memory for a short time, then remove it
   setTimeout(() => {
     jobs.delete(job.id);
-  }, 5 * 60 * 1000); // Delete job metadata after 5 minutes
+  }, 5 * 60 * 1000);
 
   res.json({ success: true, message: 'Job completion recorded' });
 });
 
 /**
  * @api {post} /api/agent/jobs/:id/error Report Print Error
- * @apiDescription Agent reports that the print job failed.
  */
 app.post('/api/agent/jobs/:id/error', authorizeAgent, (req, res) => {
   const { error } = req.body;
@@ -247,10 +303,9 @@ app.post('/api/agent/jobs/:id/error', authorizeAgent, (req, res) => {
   deleteFile(job.filename);
   console.error(`Job ${job.id} failed with error: ${job.error}`);
 
-  // Keep error status for a bit longer so frontend can read it, then clean up
   setTimeout(() => {
     jobs.delete(job.id);
-  }, 10 * 60 * 1000); // Keep error metadata for 10 minutes
+  }, 10 * 60 * 1000);
 
   res.json({ success: true, message: 'Job error recorded' });
 });
