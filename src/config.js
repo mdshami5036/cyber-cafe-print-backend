@@ -1,15 +1,6 @@
 const path = require('path');
 require('dotenv').config();
 
-// Parse rates safely, ignoring test fallback values (1 & 2)
-const parsePrice = (envVal, defaultVal) => {
-  const parsed = parseInt(envVal, 10);
-  if (!isNaN(parsed) && parsed > 2) {
-    return parsed;
-  }
-  return defaultVal;
-};
-
 module.exports = {
   PORT: process.env.PORT || 3000,
   AGENT_AUTH_TOKEN: process.env.AGENT_AUTH_TOKEN || 'default-cafe-token-xyz',
@@ -20,7 +11,7 @@ module.exports = {
   RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID || 'rzp_live_TKRvuXkMviyVSX',
   RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET || 'gRJ0aBC8WKivpAZ5cfXCmgcL',
 
-  // Print Rates (in INR per page)
-  PRICE_BW: parsePrice(process.env.PRICE_BW, 5),       // ₹5 per page
-  PRICE_COLOR: parsePrice(process.env.PRICE_COLOR, 10)  // ₹10 per page
+  // Enforced Official Print Rates (in INR per page)
+  PRICE_BW: 5,     // ₹5 per page
+  PRICE_COLOR: 10  // ₹10 per page
 };
