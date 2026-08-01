@@ -92,6 +92,18 @@ const authorizeAgent = (req, res, next) => {
 // ==========================================
 
 /**
+ * @api {get} /api/config/rates Get Live Print Rates
+ * @apiDescription Returns live rates for B&W and Color printing.
+ */
+app.get('/api/config/rates', (req, res) => {
+  res.json({
+    success: true,
+    priceBw: config.PRICE_BW,
+    priceColor: config.PRICE_COLOR
+  });
+});
+
+/**
  * @api {post} /api/payment/create-order Create Razorpay Order
  * @apiDescription Frontend calls this to get a Razorpay Order ID and price total.
  */
