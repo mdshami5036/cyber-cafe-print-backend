@@ -7,9 +7,9 @@ module.exports = {
   UPLOAD_DIR: path.join(__dirname, '..', 'uploads'),
   MAX_FILE_SIZE: 20 * 1024 * 1024, // 20 MB limit
   
-  // Razorpay Credentials
-  RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID || 'rzp_test_TI4fkwiwTmSOyb',
-  RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET || '0THToTRE0AZhPtNmNI6I83Aq',
+  // Official Live Razorpay Credentials
+  RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID || 'rzp_live_TKRvuXkMviyVSX',
+  RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET || 'gRJ0aBC8WKivpAZ5cfXCmgcL',
 
   // Print Rates (in INR per page)
   PRICE_BW: 5,     // ₹5 per page
