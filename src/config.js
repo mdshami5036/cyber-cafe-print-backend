@@ -11,7 +11,7 @@ module.exports = {
   RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID || 'rzp_live_TKRvuXkMviyVSX',
   RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET || 'gRJ0aBC8WKivpAZ5cfXCmgcL',
 
-  // Enforced Official Print Rates (in INR per page)
-  PRICE_BW: 5,     // ₹5 per page
-  PRICE_COLOR: 10  // ₹10 per page
+  // Dynamic Print Rates (Reads directly from Railway Environment Variables)
+  PRICE_BW: (process.env.PRICE_BW !== undefined && process.env.PRICE_BW !== '') ? parseInt(process.env.PRICE_BW, 10) : 5,
+  PRICE_COLOR: (process.env.PRICE_COLOR !== undefined && process.env.PRICE_COLOR !== '') ? parseInt(process.env.PRICE_COLOR, 10) : 10
 };
